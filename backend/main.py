@@ -207,6 +207,140 @@ def delete_member(member_id):
     return jsonify({'message': '删除成功'}), 200
 
 
+DURATION_DAYS = {
+    'monthly': 30,
+    'quarterly': 90,
+    'yearly': 365,
+    '1month': 30,
+    '3months': 90,
+    '6months': 180,
+    '1year': 365
+}
+
+VALID_PAYMENT_METHODS = ['cash', 'wechat', 'alipay', 'card', 'transfer']
+
+PAYMENT_LABELS = {
+    'cash': '现金',
+    'wechat': '微信支付',
+    'alipay': '支付宝',
+    'card': '银行卡',
+    'transfer': '对公转账'
+}
+
+DURATION_LABELS = {
+    'monthly': '月卡',
+    'quarterly': '季卡',
+    'yearly': '年卡',
+    '1month': '1个月',
+    '3months': '3个月',
+    '6months': '6个月',
+    '1year': '1年'
+}
+
+
+@app.route('/api/members/batch-renew', methods=['POST'])
+@jwt_required()
+def batch_renew_members():
+    data = request.get_json()
+    member_ids = data.get('member_ids', [])
+    duration = data.get('duration', '1month')
+    payment_method = data.get('payment_method', 'cash')
+
+    if not member_ids:
+        return jsonify({'message': '请选择要续卡的会员'}), 400
+
+    if duration not in DURATION_DAYS:
+        return jsonify({'message': '无效的续期时长'}), 400
+
+    if payment_method not in VALID_PAYMENT_METHODS:
+        return jsonify({'message': '无效的扣费方式'}), 400
+
+    duration_days = DURATION_DAYS[duration]
+    duration_label = DURATION_LABELS[duration]
+    payment_label = PAYMENT_LABELS[payment_method]
+
+    success_list = []
+    failed_list = []
+
+    for mid in member_ids:
+        member = Member.query.get(mid)
+        if not member:
+            failed_list.append({
+                'id': mid,
+                'name': '未知会员',
+                'reason': '会员不存在'
+            })
+            continue
+
+        if member.status == 'inactive':
+            failed_list.append({
+                'id': member.id,
+                'name': member.name,
+                'reason': '会员已停用，无法续卡'
+            })
+            continue
+
+        today = date.today()
+        old_end_value = member.membership_end
+        if member.membership_end and member.membership_end > today:
+            new_end = member.membership_end + timedelta(days=duration_days)
+            renew_type = 'extended'
+        else:
+            new_end = today + timedelta(days=duration_days)
+            if not member.membership_start or member.membership_start > today:
+                member.membership_start = today
+            renew_type = 'renewed'
+
+        member.membership_end = new_end
+        if duration == 'yearly' or duration == '1year':
+            member.membership_type = 'yearly'
+        elif duration == 'quarterly' or duration == '3months' or duration == '6months':
+            member.membership_type = 'quarterly'
+        else:
+            member.membership_type = 'monthly'
+
+        if member.status == 'expired':
+            member.status = 'active'
+
+        renew_note = "[%s] 续卡%s，扣费方式：%s，有效期至%s；" % (today.isoformat(), duration_label, payment_label, new_end.isoformat())
+        if member.notes:
+            member.notes = member.notes + '\n' + renew_note
+        else:
+            member.notes = renew_note
+
+        try:
+            db.session.flush()
+            success_list.append({
+                'id': member.id,
+                'name': member.name,
+                'phone': member.phone,
+                'old_end': old_end_value.isoformat() if old_end_value else '-',
+                'new_end': new_end.isoformat(),
+                'renew_type': renew_type,
+                'membership_type': member.membership_type,
+                'payment_method': payment_label,
+                'duration': duration_label
+            })
+        except Exception as e:
+            failed_list.append({
+                'id': member.id,
+                'name': member.name,
+                'reason': '系统错误：%s' % str(e)
+            })
+
+    db.session.commit()
+
+    return jsonify({
+        'summary': {
+            'total': len(member_ids),
+            'success': len(success_list),
+            'failed': len(failed_list)
+        },
+        'success_list': success_list,
+        'failed_list': failed_list
+    }), 200
+
+
 @app.route('/api/coaches', methods=['GET'])
 @jwt_required()
 def get_coaches():

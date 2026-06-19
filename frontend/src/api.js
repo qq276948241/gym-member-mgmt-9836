@@ -37,7 +37,8 @@ export const memberApi = {
   get: (id) => api.get(`/members/${id}`),
   create: (data) => api.post('/members', data),
   update: (id, data) => api.put(`/members/${id}`, data),
-  delete: (id) => api.delete(`/members/${id}`)
+  delete: (id) => api.delete(`/members/${id}`),
+  batchRenew: (data) => api.post('/members/batch-renew', data)
 }
 
 export const coachApi = {
